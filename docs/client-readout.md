@@ -65,9 +65,18 @@ The following scenarios are explicitly gated and require human supervisor approv
 
 ---
 
-## 5. Technology Stack Summary
+## 5. Technology Stack & Enterprise Architecture Summary
 
-- **Unified LLM Provider:** OpenRouter AI API (configured via `OPENROUTER_API_KEY`) connecting to high-speed instruction-tuned models (e.g. Gemini 2.0 Flash / Claude 3.5 Sonnet) with strict data-as-instructions prompt security.
-- **Service Layer:** Python 3.12, FastAPI REST service (`app/api/main.py`), and Pydantic v2 schemas.
-- **User Portal:** Streamlit interactive dashboard (`app/ui/app.py`) featuring Driver Chat and Operations Review queues.
-- **System of Record:** SQLite 3.x (`setuhaul_freight_operations.db`) with 18 tables, 4 views, and transaction isolation (`BEGIN IMMEDIATE`).
+- **Unified LLM Provider:** OpenRouter AI API (configured via `OPENROUTER_API_KEY` using `deepseek/deepseek-chat`) with strict data-as-instructions prompt security and tool-calling execution.
+- **Service Layer (`backend/`):** Python 3.12, FastAPI REST service (`backend/app/api/main.py`), and Pydantic v2 schemas.
+- **Enterprise Observability & Evals (`backend/app/observability/`):**
+  - OpenTelemetry-compatible distributed tracing with unique `X-Trace-Id` headers.
+  - Interactive waterfall Gantt visualization profiling HTTP requests, LLM turns, tool calls, and SQLite queries.
+  - Real-time P50, P95, and P99 latency percentiles, error rate %, and per-tool execution statistics.
+  - Centralized error monitoring capturing stack traces, taxonomy, severity, and supervisor resolution status.
+  - Automated 22-scenario evaluation suite executing all operational test cases in ~2 milliseconds.
+- **User Portal (`frontend/`):** Modern Vite + React 19 interactive logistics dashboard featuring Driver Chat Portal, Operations Review Board, Live Facility & Yard Status, and the Observability & Evals Dashboard.
+- **Deployment Segregation:**
+  - **Frontend:** Zero-config Vercel deployment with `frontend/vercel.json` SPA rewrites and `VITE_API_URL` environment variable support.
+  - **Backend:** Cloud/Docker deployable via `backend/Dockerfile` and `backend/run.py` on Render, Railway, or AWS.
+- **System of Record (`backend/setuhaul_freight_operations.db`):** Authoritative SQLite 3.x snapshot with 18 tables, 4 views, foreign keys, and atomic transaction isolation (`BEGIN IMMEDIATE`).
