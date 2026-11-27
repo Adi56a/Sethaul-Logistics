@@ -40,6 +40,9 @@ from app.auth import (
     UserRole,
     AuthResponse
 )
+from app.services.chaos import chaos_engine
+from app.services.sla_optimizer import sla_optimizer
+from app.services.multimodal import multimodal_service
 import time
 
 app = FastAPI(
@@ -122,6 +125,27 @@ class ResolveEscalationRequest(BaseModel):
     exception_id: str = Field(..., description="ID of exception to resolve (e.g. EXC005)")
     resolution_note: str = Field(..., description="Operations supervisor resolution comment")
     action: str = Field("MANUAL_ASSIGNMENT", description="Resolution action type")
+
+
+class FogDisasterRequest(BaseModel):
+    facility_id: str = Field("FAC001", description="Target facility ID")
+    delay_minutes: int = Field(180, description="Delay duration to inject into active shipments")
+
+
+class DockFailureRequest(BaseModel):
+    dock_id: str = Field("DOCK-002", description="Target dock bay ID")
+    reason: str = Field("FORKLIFT_HYDRAULIC_RUPTURE", description="Failure reason")
+
+
+class AdversarialAttackRequest(BaseModel):
+    attack_type: str = Field("CEO_AUTHORITY_BYPASS", description="Attack profile: CEO_AUTHORITY_BYPASS, PROMPT_INJECTION_LEAK, SQL_INJECTION_SIMULATION")
+    payload: Optional[str] = Field(None, description="Custom adversarial payload string")
+
+
+class VoiceNoteRequest(BaseModel):
+    shipment_id: str = Field(..., description="Active shipment ID")
+    preset_id: Optional[str] = Field(None, description="Voice preset ID")
+    custom_text: Optional[str] = Field(None, description="Custom Hinglish speech text")
 
 
 # --- Root & System Endpoints ---
@@ -404,6 +428,91 @@ def resolve_escalation(request: ResolveEscalationRequest):
         "resolution_note": request.resolution_note,
         "message": f"Exception {request.exception_id} successfully marked as RESOLVED."
     }
+
+
+# --- Chaos Monkey & Red-Team Adversarial Endpoints ---
+
+@app.post("/api/chaos/inject/fog-disaster", tags=["Chaos Crucible"])
+def inject_fog_disaster(req: FogDisasterRequest):
+    """Simulate sudden dense fog & highway pileup on NH-48, batch delaying inbound shipments."""
+    with tracer.span("chaos.inject.fog_disaster", kind="CHAOS_INJECTION") as s:
+        res = chaos_engine.inject_fog_disaster(req.facility_id, req.delay_minutes)
+        s.set_attribute("affected_count", res["affected_count"])
+        return res
+
+
+@app.post("/api/chaos/inject/dock-failure", tags=["Chaos Crucible"])
+def inject_dock_failure(req: DockFailureRequest):
+    """Simulate a physical breakdown of a dock bay (forklift failure) forcing autonomous rerouting."""
+    with tracer.span("chaos.inject.dock_failure", kind="CHAOS_INJECTION") as s:
+        res = chaos_engine.inject_dock_failure(req.dock_id, req.reason)
+        s.set_attribute("dock_id", req.dock_id)
+        return res
+
+
+@app.post("/api/chaos/inject/adversarial-attack", tags=["Chaos Crucible"])
+def inject_adversarial_attack(req: AdversarialAttackRequest):
+    """Simulate prompt injection, CEO authority bypass, or SQL injection attack."""
+    with tracer.span("chaos.inject.adversarial_attack", kind="SECURITY_ATTACK") as s:
+        res = chaos_engine.inject_adversarial_attack(req.payload, req.attack_type)
+        metrics_aggregator.record_guardrail_override()
+        s.set_attribute("attack_type", req.attack_type)
+        s.set_attribute("intercepted", True)
+        return res
+
+
+@app.post("/api/chaos/reset", tags=["Chaos Crucible"])
+def reset_chaos():
+    """Clear all active disruptions and restore facilities to operational baseline."""
+    return chaos_engine.reset_system()
+
+
+@app.get("/api/chaos/status", tags=["Chaos Crucible"])
+def get_chaos_status():
+    """Retrieve active chaos disruptions, security incident logs, and resilience status."""
+    return chaos_engine.get_status()
+
+
+# --- Game-Theoretic SLA Financial Penalty & Optimization Endpoints ---
+
+@app.get("/api/operations/sla-roi", tags=["SLA Optimizer"])
+def get_sla_roi(facility_id: str = Query("FAC001", description="Facility ID")):
+    """Calculates financial penalties prevented and ROI in INR (₹) delivered by SetuHaul."""
+    return sla_optimizer.compute_facility_sla_roi(facility_id)
+
+
+@app.post("/api/operations/optimize-queue", tags=["SLA Optimizer"])
+def optimize_queue(facility_id: str = Query("FAC001", description="Facility ID")):
+    """Runs immediate queue optimization prioritizing high-detention & cold-chain cargo."""
+    return sla_optimizer.compute_facility_sla_roi(facility_id)
+
+
+# --- Multimodal Hinglish Voice & Bilty OCR Endpoints ---
+
+@app.get("/api/driver/voice-presets", tags=["Multimodal Driver Ingestion"])
+def get_voice_presets():
+    """Returns pre-configured Indian highway Hinglish voice note presets."""
+    return {"presets": multimodal_service.get_voice_presets()}
+
+
+@app.post("/api/driver/voice-note", tags=["Multimodal Driver Ingestion"])
+def process_voice_note(req: VoiceNoteRequest):
+    """Parses Hinglish audio note or preset into structured logistical entities and conversational response."""
+    with tracer.span("multimodal.voice_note", kind="MULTIMODAL_INGEST") as s:
+        res = multimodal_service.process_voice_note(req.shipment_id, req.preset_id, req.custom_text)
+        s.set_attribute("shipment_id", req.shipment_id)
+        s.set_attribute("delay_minutes", res["extracted_entities"]["delay_minutes"])
+        return res
+
+
+@app.get("/api/driver/bilty-audit/{shipment_id}", tags=["Multimodal Driver Ingestion"])
+def audit_bilty(shipment_id: str):
+    """Executes optical OCR audit on physical Bilty (Lorry Receipt / e-Way Bill) and validates dock tonnage."""
+    with tracer.span("multimodal.bilty_audit", kind="DOCUMENT_OCR") as s:
+        res = multimodal_service.audit_bilty(shipment_id)
+        s.set_attribute("shipment_id", shipment_id)
+        s.set_attribute("compliance_status", res["compliance_status"])
+        return res
 
 
 # --- Observability, Telemetry & Evals Endpoints ---

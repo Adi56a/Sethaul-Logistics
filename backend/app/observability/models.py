@@ -58,6 +58,7 @@ class MetricSnapshot(BaseModel):
     tool_metrics: Dict[str, Dict[str, Any]]
     active_traces_count: int
     open_errors_count: int
+    guardrail_overrides: int = 0
 
 
 class ScenarioResult(BaseModel):

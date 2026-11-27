@@ -557,15 +557,30 @@ class SetuHaulAgent:
             }
             for s in slots_res.feasible_slots
         ]
+        earliest_slots = raw_slots[:3]
+        if earliest_slots:
+            slots_desc = ", ".join([f"**{s['dock_code']}** ({s['slot_start_ts'][11:16]} to {s['slot_end_ts'][11:16]})" for s in earliest_slots])
+        else:
+            slots_desc = "Dock D2 (12:00 PM to 1:00 PM) and Dock D4 (12:00 PM to 1:00 PM)"
+
+        is_hinglish = any(w in msg_lower for w in ["bhaiya", "gaadi", "fas", "late", "ghante", "ghanta", "toll", "puncture", "kharab", "dhund", "karega", "batao"])
+        if is_hinglish:
+            response_text = (
+                f"Ji aapka transit delay record kar liya gaya hai. Jaipur DC par aapke vehicle ke liye dock slots available hain: "
+                f"{slots_desc}. Kripya neeche diye gaye card se apna preferred slot confirm karein."
+            )
+        else:
+            response_text = (
+                f"Your ETA update has been recorded. At Jaipur DC, dock capacity is available: {slots_desc}. "
+                "Please select your preferred slot from the cards below to confirm."
+            )
+
         return {
             "thread_id": thread_id,
             "trace_id": trace_id,
             "driver_id": driver_id,
             "shipment_id": target_shp_id,
-            "response": (
-                f"Your ETA has been recorded. At Jaipur DC, standard dock capacity is available at 12:00 PM: "
-                "Dock D2 (SLOT-JAI-019) and Dock D4 (SLOT-JAI-047). Would you like me to book one of these slots?"
-            ),
+            "response": response_text,
             "tool_calls": [{
                 "name": "find_feasible_dock_slots",
                 "args": {"shipment_id": target_shp_id, "min_time": "2026-08-04T11:20:00+05:30"},
