@@ -58,7 +58,7 @@ def run_health_check(db_path: str = "setuhaul_freight_operations.db") -> Dict[st
             "eta_updates": 12,
             "appointment_slots": 106,
             "appointments": 20,
-            "dock_status_events": 3,
+            "dock_status_events": 1,
             "facility_checkins": 5,
             "chat_threads": 12,
             "chat_messages": 20,

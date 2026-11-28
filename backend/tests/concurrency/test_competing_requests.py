@@ -23,15 +23,20 @@ TEST_CONCURRENCY_DB = "concurrency_test_fixture.db"
 class TestConcurrencyAndIntegrity(unittest.TestCase):
     def setUp(self):
         # Create a fresh isolated copy of the database fixture for concurrency testing
-        if os.path.exists(TEST_CONCURRENCY_DB):
-            os.remove(TEST_CONCURRENCY_DB)
-        shutil.copyfile(resolve_db_path(), TEST_CONCURRENCY_DB)
-
-    def tearDown(self):
+        import gc; gc.collect()
         if os.path.exists(TEST_CONCURRENCY_DB):
             try:
                 os.remove(TEST_CONCURRENCY_DB)
-            except PermissionError:
+            except Exception:
+                pass
+        shutil.copyfile(resolve_db_path(), TEST_CONCURRENCY_DB)
+
+    def tearDown(self):
+        import gc; gc.collect()
+        if os.path.exists(TEST_CONCURRENCY_DB):
+            try:
+                os.remove(TEST_CONCURRENCY_DB)
+            except Exception:
                 pass
 
     def test_simultaneous_slot_competition(self):
@@ -115,10 +120,12 @@ class TestConcurrencyAndIntegrity(unittest.TestCase):
         """
         repo = DatabaseRepository(TEST_CONCURRENCY_DB)
         service = BookingService(repo)
+        import uuid
+        key = f"idempotent-key-{uuid.uuid4().hex[:6]}"
         payload = ConfirmAppointmentInput(
             shipment_id="SHP1006",
             slot_id="SLOT-JAI-047",
-            idempotency_key="idempotent-key-999"
+            idempotency_key=key
         )
 
         # 1. First execution

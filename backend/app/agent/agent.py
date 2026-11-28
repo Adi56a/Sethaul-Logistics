@@ -20,6 +20,7 @@ from langchain_openai import ChatOpenAI
 from app.agent.prompts import SETUHAUL_AGENT_SYSTEM_PROMPT
 from app.agent.tools import ALL_AGENT_TOOLS
 from app.observability import tracer, metrics_aggregator, error_monitor
+from app.repositories.db import DatabaseRepository
 
 
 def _clean_response_text(content: Any) -> str:
@@ -121,6 +122,8 @@ class SetuHaulAgent:
         self.conversation_memory: Dict[str, List[Any]] = {}
         # Scoped operational session facts {thread_id: {driver_id, shipment_id, shipment, ...}}
         self.thread_context: Dict[str, Dict[str, Any]] = {}
+        # Database repository for persistent message logging and state restoration
+        self.repo = DatabaseRepository()
 
         # LLM client initialization
         if self.api_key:
@@ -140,19 +143,68 @@ class SetuHaulAgent:
             self.llm = None
 
     def get_thread_history(self, thread_id: str) -> List[Any]:
-        """Retrieves or initializes message history for a conversation thread."""
+        """Retrieves or initializes message history for a conversation thread with DB persistence."""
         if thread_id not in self.conversation_memory:
-            self.conversation_memory[thread_id] = [
+            history = [
                 SystemMessage(content=SETUHAUL_AGENT_SYSTEM_PROMPT)
             ]
+            # Restore previous conversation turns from SQLite database
+            try:
+                db_messages = self.repo.get_chat_history(thread_id)
+                for m in db_messages:
+                    if m["role"] == "user":
+                        history.append(HumanMessage(content=m["content"]))
+                    else:
+                        history.append(AIMessage(content=m["content"]))
+            except Exception as e:
+                print(f"[SetuHaulAgent] Error restoring thread history: {e}")
+            self.conversation_memory[thread_id] = history
         return self.conversation_memory[thread_id]
 
     def clear_thread(self, thread_id: str):
-        """Clears memory for a completed or reset thread."""
+        """Clears memory for a completed or reset thread and cleans persistent store."""
         if thread_id in self.conversation_memory:
             del self.conversation_memory[thread_id]
         if thread_id in self.thread_context:
             del self.thread_context[thread_id]
+        try:
+            self.repo.clear_chat_history(thread_id)
+        except Exception as e:
+            print(f"[SetuHaulAgent] Error clearing SQLite thread: {e}")
+
+    def _persist_turn(
+        self,
+        thread_id: str,
+        driver_id: str,
+        shipment_id: str,
+        response_text: str,
+        tool_calls: List[Dict[str, Any]],
+        execution_pipeline: List[Dict[str, Any]],
+        feasible_slots: List[Dict[str, Any]],
+        latency_ms: float,
+        status: str
+    ):
+        """Helper to atomically persist assistant turn with rich payload in SQLite."""
+        try:
+            payload = json.dumps({
+                "tool_calls": tool_calls,
+                "execution_pipeline": execution_pipeline,
+                "feasible_slots": feasible_slots,
+                "latency_ms": latency_ms,
+                "status": status
+            })
+            self.repo.save_chat_message(
+                thread_id=thread_id,
+                sender_type="AGENT",
+                sender_reference="SetuHaulAgent",
+                message_text=response_text,
+                driver_id=driver_id,
+                shipment_id=shipment_id,
+                payload_json=payload,
+                parsed_intent=status
+            )
+        except Exception as e:
+            print(f"[SetuHaulAgent] Error persisting assistant turn: {e}")
 
     def chat(
         self,
@@ -188,6 +240,19 @@ class SetuHaulAgent:
             f"current_shipment_id='{active_shipment}']\n"
         )
         history.append(HumanMessage(content=session_prefix + user_message))
+
+        # Persist incoming driver message to SQLite
+        try:
+            self.repo.save_chat_message(
+                thread_id=thread_id,
+                sender_type="DRIVER",
+                sender_reference=active_driver,
+                message_text=user_message,
+                driver_id=active_driver,
+                shipment_id=active_shipment
+            )
+        except Exception as err:
+            print(f"[SetuHaulAgent] Error persisting driver message: {err}")
 
         # Check if LLM is available
         if not self.llm:
@@ -253,6 +318,18 @@ class SetuHaulAgent:
                         "status": final_status,
                         "timestamp": time.strftime("%H:%M:%S")
                     })
+
+                    self._persist_turn(
+                        thread_id=thread_id,
+                        driver_id=active_driver,
+                        shipment_id=active_shipment,
+                        response_text=clean_text,
+                        tool_calls=tool_calls_executed,
+                        execution_pipeline=execution_pipeline,
+                        feasible_slots=feasible_slots_found,
+                        latency_ms=duration_ms,
+                        status=final_status
+                    )
 
                     return {
                         "thread_id": thread_id,
@@ -386,6 +463,20 @@ class SetuHaulAgent:
         from app.tools.schemas import ConfirmAppointmentInput, ResultCode
         trace_id = tracer.get_current_trace_id() or f"trc-{uuid.uuid4().hex[:12]}"
 
+        def _wrap_return(res_dict: Dict[str, Any]) -> Dict[str, Any]:
+            self._persist_turn(
+                thread_id=res_dict.get("thread_id", thread_id),
+                driver_id=res_dict.get("driver_id", driver_id or "UNKNOWN"),
+                shipment_id=res_dict.get("shipment_id", shipment_id or "UNKNOWN"),
+                response_text=res_dict.get("response", ""),
+                tool_calls=res_dict.get("tool_calls", []),
+                execution_pipeline=res_dict.get("execution_pipeline", []),
+                feasible_slots=res_dict.get("feasible_slots", []),
+                latency_ms=res_dict.get("latency_ms", 12.0),
+                status=res_dict.get("status", "COMPLETED")
+            )
+            return res_dict
+
         saved_ctx = self.thread_context.setdefault(thread_id, {})
         shipment = saved_ctx.get("shipment")
 
@@ -411,7 +502,7 @@ class SetuHaulAgent:
 
                 if not shipment:
                     refs = [f"{s['order_reference']} (to {s['destination_facility_id']})" for s in drv_ctx["active_shipments"]]
-                    return {
+                    return _wrap_return({
                         "thread_id": thread_id,
                         "trace_id": trace_id,
                         "driver_id": driver_id,
@@ -430,7 +521,7 @@ class SetuHaulAgent:
                             {"stage": "Driver Identity Resolution", "detail": f"Ambiguous loads: {', '.join(refs)}", "status": "AWAITING_CLARIFICATION"}
                         ],
                         "status": "AWAITING_CLARIFICATION"
-                    }
+                    })
             else:
                 shipment = drv_ctx.get("selected_shipment")
                 if shipment:
@@ -439,7 +530,7 @@ class SetuHaulAgent:
                     saved_ctx["shipment"] = shipment
 
         if not shipment:
-            return {
+            return _wrap_return({
                 "thread_id": thread_id,
                 "trace_id": trace_id,
                 "driver_id": driver_id,
@@ -447,7 +538,7 @@ class SetuHaulAgent:
                 "tool_calls": [],
                 "execution_pipeline": [],
                 "status": "NOT_FOUND"
-            }
+            })
 
         target_shp_id = shipment["shipment_id"]
         msg_lower = user_message.lower()
@@ -461,7 +552,7 @@ class SetuHaulAgent:
                 shipment_id=target_shp_id,
                 description="Reefer bay D5 is under power maintenance 18:00-22:00. No same-day slots available."
             )
-            return {
+            return _wrap_return({
                 "thread_id": thread_id,
                 "trace_id": trace_id,
                 "driver_id": driver_id,
@@ -492,7 +583,7 @@ class SetuHaulAgent:
                     {"stage": "Supervisor Escalation", "detail": f"Assigned Ticket {esc['escalation_id']}", "status": "ESCALATED"}
                 ],
                 "status": "ESCALATED"
-            }
+            })
 
         # Booking confirmation request
         if "book" in msg_lower or "confirm" in msg_lower:
@@ -503,7 +594,7 @@ class SetuHaulAgent:
                 idempotency_key=f"det-{thread_id}-{slot_id}"
             ))
             if book_res.result_code == ResultCode.BOOKING_CONFIRMED:
-                return {
+                return _wrap_return({
                     "thread_id": thread_id,
                     "trace_id": trace_id,
                     "driver_id": driver_id,
@@ -523,9 +614,9 @@ class SetuHaulAgent:
                         {"stage": "Atomic Slot Commit", "detail": f"Acquired lock on {slot_id} -> Appointment {book_res.appointment_id}", "status": "CONFIRMED"}
                     ],
                     "status": "CONFIRMED"
-                }
+                })
             else:
-                return {
+                return _wrap_return({
                     "thread_id": thread_id,
                     "trace_id": trace_id,
                     "driver_id": driver_id,
@@ -542,7 +633,7 @@ class SetuHaulAgent:
                         {"stage": "Concurrency Check", "detail": f"Slot {slot_id} conflict detected. Refreshed alternatives.", "status": "CONFLICT"}
                     ],
                     "status": "CONFLICT"
-                }
+                })
 
         # Standard delay / ask for options
         slots_res = feasibility.search_feasible_slots(target_shp_id, min_time="2026-08-04T11:20:00+05:30")
@@ -575,7 +666,7 @@ class SetuHaulAgent:
                 "Please select your preferred slot from the cards below to confirm."
             )
 
-        return {
+        return _wrap_return({
             "thread_id": thread_id,
             "trace_id": trace_id,
             "driver_id": driver_id,
@@ -593,4 +684,4 @@ class SetuHaulAgent:
             ],
             "feasible_slots": raw_slots,
             "status": "OPTIONS_PRESENTED"
-        }
+        })

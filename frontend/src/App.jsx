@@ -42,7 +42,10 @@ import {
   DollarSign,
   FileCheck2,
   Sparkles,
-  Volume2
+  Volume2,
+  Sun,
+  Moon,
+  Compass
 } from 'lucide-react'
 
 // Backend API Base URL (uses VITE_API_URL in production, or empty string for local dev proxy)
@@ -109,6 +112,17 @@ function renderBold(str) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('chat') // 'chat' | 'operations' | 'facilities'
+  
+  // Theme State (defaults to 'light' aesthetic)
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('setuhaul_theme') || 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('setuhaul_theme', theme)
+  }, [theme])
+
   const [healthStatus, setHealthStatus] = useState('ONLINE')
   const [metrics, setMetrics] = useState({
     open_exceptions: 0,
@@ -207,6 +221,47 @@ export default function App() {
     fetchSlaRoi()
     fetchVoicePresets()
   }, [])
+
+  // Load persistent chat history from SQLite backend & localStorage
+  useEffect(() => {
+    const thread = `THR-${selectedDriverId}`
+    try {
+      const cached = localStorage.getItem(`setuhaul_chat_${thread}`)
+      if (cached) {
+        const parsed = JSON.parse(cached)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(prev => ({ ...prev, [thread]: parsed }))
+          const lastAss = [...parsed].reverse().find(m => m.role === 'assistant')
+          if (lastAss) setActiveInspectorData(lastAss)
+        }
+      }
+    } catch (e) {}
+
+    const fetchHistory = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/chat/history/${thread}`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.messages && data.messages.length > 0) {
+            setMessages(prev => {
+              const updated = { ...prev, [thread]: data.messages }
+              try {
+                localStorage.setItem(`setuhaul_chat_${thread}`, JSON.stringify(data.messages))
+              } catch (e) {}
+              return updated
+            })
+            const lastAssistantMsg = [...data.messages].reverse().find(m => m.role === 'assistant')
+            if (lastAssistantMsg) {
+              setActiveInspectorData(lastAssistantMsg)
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch chat history from backend:', err)
+      }
+    }
+    fetchHistory()
+  }, [selectedDriverId])
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -553,10 +608,13 @@ export default function App() {
           status: data.status,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
-        setMessages(prev => ({
-          ...prev,
-          [thread]: [...(prev[thread] || []), assistantMsg]
-        }))
+        setMessages(prev => {
+          const updated = [...(prev[thread] || []), assistantMsg]
+          try {
+            localStorage.setItem(`setuhaul_chat_${thread}`, JSON.stringify(updated))
+          } catch (e) {}
+          return { ...prev, [thread]: updated }
+        })
         setActiveInspectorData(assistantMsg)
         fetchFacilities()
         fetchSlaRoi()
@@ -752,10 +810,13 @@ export default function App() {
           status: data.status,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
-        setMessages(prev => ({
-          ...prev,
-          [thread]: [...(prev[thread] || []), assistantMsg]
-        }))
+        setMessages(prev => {
+          const updated = [...(prev[thread] || []), assistantMsg]
+          try {
+            localStorage.setItem(`setuhaul_chat_${thread}`, JSON.stringify(updated))
+          } catch (e) {}
+          return { ...prev, [thread]: updated }
+        })
         setActiveInspectorData(assistantMsg)
         fetchFacilities()
         fetchSlaRoi()
@@ -899,10 +960,13 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
 
-        setMessages(prev => ({
-          ...prev,
-          [threadId]: [...(prev[threadId] || []), assistantMsg]
-        }))
+        setMessages(prev => {
+          const updated = [...(prev[threadId] || []), assistantMsg]
+          try {
+            localStorage.setItem(`setuhaul_chat_${threadId}`, JSON.stringify(updated))
+          } catch (e) {}
+          return { ...prev, [threadId]: updated }
+        })
 
         // Update real background inspector immediately with real activity
         setActiveInspectorData(assistantMsg)
@@ -919,10 +983,13 @@ export default function App() {
           tool_calls: [],
           execution_pipeline: []
         }
-        setMessages(prev => ({
-          ...prev,
-          [threadId]: [...(prev[threadId] || []), errorMsg]
-        }))
+        setMessages(prev => {
+          const updated = [...(prev[threadId] || []), errorMsg]
+          try {
+            localStorage.setItem(`setuhaul_chat_${threadId}`, JSON.stringify(updated))
+          } catch (e) {}
+          return { ...prev, [threadId]: updated }
+        })
       }
     } catch (err) {
       const errorMsg = {
@@ -932,10 +999,13 @@ export default function App() {
         tool_calls: [],
         execution_pipeline: []
       }
-      setMessages(prev => ({
-        ...prev,
-        [threadId]: [...(prev[threadId] || []), errorMsg]
-      }))
+      setMessages(prev => {
+        const updated = [...(prev[threadId] || []), errorMsg]
+        try {
+          localStorage.setItem(`setuhaul_chat_${threadId}`, JSON.stringify(updated))
+        } catch (e) {}
+        return { ...prev, [threadId]: updated }
+      })
     } finally {
       setIsLoadingChat(false)
     }
@@ -949,6 +1019,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ thread_id: threadId })
       })
+      localStorage.removeItem(`setuhaul_chat_${threadId}`)
     } catch (e) {
       console.warn('Reset error:', e)
     }
@@ -966,10 +1037,12 @@ export default function App() {
         }
       ]
     }
-    setMessages(prev => ({
-      ...prev,
-      [threadId]: [initialMsg]
-    }))
+    setMessages(prev => {
+      try {
+        localStorage.setItem(`setuhaul_chat_${threadId}`, JSON.stringify([initialMsg]))
+      } catch (e) {}
+      return { ...prev, [threadId]: [initialMsg] }
+    })
     setActiveInspectorData(initialMsg)
   }
 
@@ -1016,25 +1089,105 @@ export default function App() {
       {/* Top Header */}
       <header className="app-header">
         <div className="brand-section">
-          <div className="brand-logo">🚚</div>
+          <div className="brand-logo">
+            <Truck size={18} strokeWidth={2.2} />
+          </div>
           <div className="brand-info">
-            <h1>SetuHaul Logistics Portal</h1>
-            <p>Conversational Exception Resolution & Dock Scheduling Service</p>
+            <h1>
+              SetuHaul Logistics
+              <span style={{ fontSize: '0.62rem', padding: '0.12rem 0.45rem', borderRadius: '4px', background: 'var(--primary-light)', color: 'var(--primary)', border: '1px solid var(--primary-border)', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                v2.0 Autonomous
+              </span>
+            </h1>
+            <p>Conversational Exception Resolution & Dynamic Dock Scheduling</p>
           </div>
         </div>
 
         <div className="header-status-bar">
+          {/* Theme Palette Switcher */}
+          <div style={{ display: 'inline-flex', alignItems: 'center', background: 'var(--bg-tertiary)', padding: '2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', marginRight: '0.35rem' }}>
+            <button
+              type="button"
+              onClick={() => setTheme('light')}
+              title="Aesthetic Light (Stripe / Linear Porcelain & Royal Blue)"
+              style={{
+                padding: '0.22rem 0.55rem',
+                fontSize: '0.7rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                border: 'none',
+                background: theme === 'light' ? 'var(--bg-card)' : 'transparent',
+                color: theme === 'light' ? 'var(--primary)' : 'var(--text-muted)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                boxShadow: theme === 'light' ? 'var(--shadow-sm)' : 'none',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <Sun size={12} />
+              <span>Light</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTheme('nordic')}
+              title="Nordic Slate (Deep Navy & Ice Cobalt)"
+              style={{
+                padding: '0.22rem 0.55rem',
+                fontSize: '0.7rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                border: 'none',
+                background: theme === 'nordic' ? 'var(--bg-card)' : 'transparent',
+                color: theme === 'nordic' ? 'var(--primary)' : 'var(--text-muted)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                boxShadow: theme === 'nordic' ? 'var(--shadow-sm)' : 'none',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <Compass size={12} />
+              <span>Nordic</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTheme('dark')}
+              title="Obsidian Dark (Deep SaaS)"
+              style={{
+                padding: '0.22rem 0.55rem',
+                fontSize: '0.7rem',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                border: 'none',
+                background: theme === 'dark' ? 'var(--bg-card)' : 'transparent',
+                color: theme === 'dark' ? 'var(--primary)' : 'var(--text-muted)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                boxShadow: theme === 'dark' ? 'var(--shadow-sm)' : 'none',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <Moon size={12} />
+              <span>Dark</span>
+            </button>
+          </div>
+
           <span className="status-pill online">
             <span className="pulse-dot"></span>
             Backend: {healthStatus}
           </span>
           <span className="status-pill model">
             <Cpu size={13} />
-            Model: deepseek/deepseek-chat (OpenRouter)
+            Model: deepseek/deepseek-chat
           </span>
           <span className="status-pill">
             <Clock size={13} />
-            4 Aug 2026, 11:00 AM IST (+05:30)
+            4 Aug 2026, 11:00 AM IST
           </span>
           <span className="status-pill alert">
             <ShieldAlert size={13} />
@@ -1047,11 +1200,11 @@ export default function App() {
       <section className="chaos-control-bar">
         <div className="chaos-label-group">
           <span className="chaos-title">
-            <Flame size={18} style={{ color: '#f43f5e' }} />
-            CHAOS MONKEY & RED-TEAM SANDBOX
+            <Flame size={14} style={{ color: '#f43f5e' }} />
+            Chaos & Red-Team Simulation
           </span>
-          <span style={{ fontSize: '0.72rem', color: '#cbd5e1' }}>
-            Live Interactor for Evaluators:
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
+            Live Evaluator Sandbox:
           </span>
         </div>
 
@@ -1062,8 +1215,8 @@ export default function App() {
             disabled={isInjectingChaos}
             title="Batch delay 8 inbound trucks by 180 min due to dense fog pileup on NH-48"
           >
-            <AlertTriangle size={14} />
-            <span>💥 Fog Gridlock (+180m)</span>
+            <AlertTriangle size={13} />
+            <span>Fog Gridlock (+180m)</span>
           </button>
 
           <button
@@ -1072,8 +1225,8 @@ export default function App() {
             disabled={isInjectingChaos}
             title="Breakdown Bay D2 forklift hoist forcing immediate autonomous rerouting"
           >
-            <Zap size={14} />
-            <span>💥 Bay D2 Rupture</span>
+            <Zap size={13} />
+            <span>Bay D2 Rupture</span>
           </button>
 
           <button
@@ -1082,8 +1235,8 @@ export default function App() {
             disabled={isInjectingChaos}
             title="Simulate executive CEO prompt injection jailbreak"
           >
-            <ShieldAlert size={14} />
-            <span>🛡️ CEO Jailbreak Attack</span>
+            <ShieldAlert size={13} />
+            <span>CEO Jailbreak Attack</span>
           </button>
 
           <button
@@ -1092,16 +1245,16 @@ export default function App() {
             disabled={isInjectingChaos}
             title="Restore all facilities and trucks to operational baseline"
           >
-            <RotateCcw size={14} />
-            <span>🔄 Reset Baseline</span>
+            <RotateCcw size={13} />
+            <span>Reset Baseline</span>
           </button>
 
-          <div style={{ display: 'flex', gap: '0.4rem', marginLeft: '0.5rem' }}>
-            <span className="badge badge-critical" style={{ fontSize: '0.72rem' }}>
-              {chaosStatus.active_chaos_events_count} Active Disruptions
+          <div style={{ display: 'flex', gap: '0.35rem', marginLeft: '0.35rem' }}>
+            <span className="badge badge-critical" style={{ fontSize: '0.68rem' }}>
+              {chaosStatus.active_chaos_events_count} Disruptions
             </span>
-            <span className="badge badge-resolved" style={{ fontSize: '0.72rem' }}>
-              {chaosStatus.security_thwarted_attacks_count} Attacks Thwarted
+            <span className="badge badge-resolved" style={{ fontSize: '0.68rem' }}>
+              {chaosStatus.security_thwarted_attacks_count} Thwarted
             </span>
           </div>
         </div>
@@ -1109,14 +1262,14 @@ export default function App() {
 
       {/* Live Chaos Toast Banner */}
       {chaosNotification && (
-        <div style={{ background: 'rgba(30, 41, 59, 0.95)', border: '1px solid #38bdf8', padding: '0.65rem 1.25rem', borderRadius: 'var(--radius-md)', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.84rem', color: '#f0fdf4', boxShadow: '0 4px 15px rgba(0,0,0,0.5)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <Sparkles size={16} style={{ color: '#38bdf8' }} />
+        <div style={{ background: 'var(--bg-card)', border: '1px solid var(--primary-border)', padding: '0.55rem 1rem', borderRadius: 'var(--radius-sm)', margin: '0.65rem 1.25rem 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem', color: '#f8fafc', boxShadow: 'var(--shadow-sm)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Sparkles size={15} style={{ color: 'var(--primary)' }} />
             <span>{chaosNotification}</span>
           </div>
           <button
             onClick={() => setChaosNotification(null)}
-            style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '1rem', padding: '0 0.4rem' }}
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.9rem', padding: '0 0.35rem' }}
           >
             ✕
           </button>
@@ -1129,16 +1282,16 @@ export default function App() {
           className={`tab-btn ${activeTab === 'chat' ? 'active' : ''}`}
           onClick={() => setActiveTab('chat')}
         >
-          <MessageSquare size={16} />
-          Driver Chat Portal
+          <MessageSquare size={14} />
+          Driver Dispatch
         </button>
 
         <button
           className={`tab-btn ${activeTab === 'operations' ? 'active' : ''}`}
           onClick={() => setActiveTab('operations')}
         >
-          <ShieldAlert size={16} />
-          Operations Review Queue
+          <ShieldAlert size={14} />
+          Operations Queue
           {metrics.open_exceptions > 0 && (
             <span className="tab-badge">{metrics.open_exceptions}</span>
           )}
@@ -1151,8 +1304,8 @@ export default function App() {
             fetchFacilities()
           }}
         >
-          <Building2 size={16} />
-          Live Facility Status & Yard Queue
+          <Building2 size={14} />
+          Facilities & Docks
         </button>
 
         <button
@@ -1162,10 +1315,10 @@ export default function App() {
             fetchSlaRoi()
           }}
         >
-          <DollarSign size={16} />
-          SLA Cost & ROI Minimizer
+          <DollarSign size={14} />
+          SLA Financial ROI
           {slaRoi && (
-            <span className="tab-badge" style={{ background: '#10b981', color: '#fff' }}>
+            <span className="tab-badge" style={{ background: 'var(--success-bg)', color: 'var(--success-text)', borderColor: 'var(--success-border)' }}>
               {slaRoi.total_savings_formatted}
             </span>
           )}
@@ -1178,10 +1331,10 @@ export default function App() {
             fetchChaosStatus()
           }}
         >
-          <Flame size={16} />
-          Chaos Crucible & Red-Team
+          <Flame size={14} />
+          Chaos Crucible
           {chaosStatus.active_chaos_events_count > 0 && (
-            <span className="tab-badge" style={{ background: 'var(--danger)', color: '#fff' }}>
+            <span className="tab-badge">
               {chaosStatus.active_chaos_events_count} Active
             </span>
           )}
@@ -1194,10 +1347,10 @@ export default function App() {
             fetchObservabilityData()
           }}
         >
-          <Activity size={16} />
-          Observability & Evals
+          <Activity size={14} />
+          Observability & Tracing
           {(Array.isArray(obsErrors) ? obsErrors : []).filter(e => e.status === 'OPEN' || e.status === 'UNRESOLVED').length > 0 && (
-            <span className="tab-badge" style={{ background: 'var(--danger)', color: '#fff' }}>
+            <span className="tab-badge">
               {(Array.isArray(obsErrors) ? obsErrors : []).filter(e => e.status === 'OPEN' || e.status === 'UNRESOLVED').length}
             </span>
           )}
@@ -1209,8 +1362,8 @@ export default function App() {
             onClick={() => setShowInspector(!showInspector)}
             title="Toggle Live Background Activity Inspector"
           >
-            <Activity size={14} />
-            {showInspector ? 'Hide Background Inspector' : 'Show Background Inspector'}
+            <Activity size={13} />
+            {showInspector ? 'Hide Inspector' : 'Show Inspector'}
           </button>
         )}
       </nav>
@@ -1225,14 +1378,17 @@ export default function App() {
             {/* COLUMN 1: Driver Session & Context */}
             <div className="card">
               <div className="card-title">
-                <span>🪪 Driver Session</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                  <User size={15} style={{ color: 'var(--primary)' }} />
+                  Driver Identity
+                </span>
                 <button
                   className="btn btn-secondary"
-                  style={{ padding: '0.25rem 0.55rem', fontSize: '0.75rem' }}
+                  style={{ padding: '0.2rem 0.5rem', fontSize: '0.72rem' }}
                   onClick={resetThread}
                   title="Clear conversation history"
                 >
-                  <RotateCcw size={12} />
+                  <RotateCcw size={11} />
                   Reset
                 </button>
               </div>
@@ -1280,25 +1436,25 @@ export default function App() {
                 </div>
                 <div className="info-item">
                   <span className="info-label">Assigned Shipment</span>
-                  <span className="info-val" style={{ color: '#93c5fd' }}>{currentDriver.shipment_id || 'N/A'}</span>
+                  <span className="info-val" style={{ color: 'var(--primary)' }}>{currentDriver.shipment_id || 'N/A'}</span>
                 </div>
               </div>
 
               {/* Shipment Details Card */}
               {currentDriver.order_reference && (
-                <div style={{ background: 'rgba(0,0,0,0.25)', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)' }}>
-                  <div style={{ fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.4rem' }}>
+                <div style={{ background: 'var(--bg-surface)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '0.35rem', letterSpacing: '0.04em' }}>
                     Active Load Manifest
                   </div>
-                  <div style={{ fontSize: '0.82rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                    <div><strong>Order:</strong> <span style={{ fontFamily: 'var(--font-mono)', color: '#93c5fd' }}>{currentDriver.order_reference}</span></div>
+                  <div style={{ fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                    <div><strong>Order:</strong> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--primary)' }}>{currentDriver.order_reference}</span></div>
                     <div><strong>Destination:</strong> {currentDriver.facility_name || currentDriver.destination_facility_id}</div>
                     <div><strong>Status:</strong> <span className="badge badge-medium">{currentDriver.shipment_status}</span></div>
                     {currentDriver.slot_start_ts && (
-                      <div><strong>Current Slot:</strong> <span style={{ fontFamily: 'var(--font-mono)', color: '#34d399' }}>{currentDriver.slot_start_ts.replace('T', ' ').slice(11, 16)} ({currentDriver.dock_id})</span></div>
+                      <div><strong>Current Slot:</strong> <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--success)' }}>{currentDriver.slot_start_ts.replace('T', ' ').slice(11, 16)} ({currentDriver.dock_id})</span></div>
                     )}
                   </div>
-                  <div style={{ marginTop: '0.75rem' }}>
+                  <div style={{ marginTop: '0.65rem' }}>
                     <button
                       className="btn btn-secondary"
                       style={{
@@ -1306,24 +1462,24 @@ export default function App() {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: '0.5rem',
-                        background: 'rgba(59, 130, 246, 0.15)',
-                        borderColor: '#3b82f6',
-                        color: '#93c5fd',
-                        fontSize: '0.78rem',
-                        padding: '0.45rem'
+                        gap: '0.45rem',
+                        background: 'var(--primary-light)',
+                        borderColor: 'var(--primary-border)',
+                        color: 'var(--primary)',
+                        fontSize: '0.75rem',
+                        padding: '0.4rem'
                       }}
                       onClick={() => handleAuditBilty(currentDriver.shipment_id || 'SHP1016')}
                     >
-                      <FileCheck2 size={15} />
-                      <span>Audit Physical Bilty / e-Way Bill</span>
+                      <FileCheck2 size={14} />
+                      <span>Audit Consignment Note (Bilty OCR)</span>
                     </button>
                   </div>
                 </div>
               )}
 
-              <div style={{ marginTop: 'auto', fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-                Thread ID: <code style={{ color: 'var(--primary)', fontFamily: 'var(--font-mono)' }}>{threadId}</code>
+              <div style={{ marginTop: 'auto', fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                Thread ID: <code style={{ color: 'var(--primary)' }}>{threadId}</code>
               </div>
             </div>
 
@@ -1341,7 +1497,7 @@ export default function App() {
                         {/* Recorded Audio Playback if present */}
                         {msg.audio_url && (
                           <div className="audio-bubble-player">
-                            <Volume2 size={16} style={{ color: '#38bdf8', flexShrink: 0 }} />
+                            <Volume2 size={16} style={{ color: 'var(--primary)', flexShrink: 0 }} />
                             <audio controls src={msg.audio_url} style={{ height: '30px', maxWidth: '240px' }} />
                           </div>
                         )}
@@ -1352,7 +1508,7 @@ export default function App() {
                         {/* Interactive Feasible Slots Cards */}
                         {msg.feasible_slots && msg.feasible_slots.length > 0 && (
                           <div style={{ marginTop: '0.85rem' }}>
-                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#93c5fd', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--primary)', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                               <PackageCheck size={14} />
                               Available Feasible Slots (Click to Book):
                             </div>
@@ -1390,8 +1546,8 @@ export default function App() {
                             onClick={() => speakAloud(msg.clean_tts || msg.content, idx)}
                             title="Listen to response spoken aloud in natural Hinglish"
                           >
-                            <Volume2 size={12} />
-                            <span>{speakingMsgIndex === idx ? 'Stop Voice' : '🔊 Bol kar suniye'}</span>
+                            <Volume2 size={11} />
+                            <span>{speakingMsgIndex === idx ? 'Stop Voice' : 'Play Voice'}</span>
                           </button>
                         )}
                         {msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0 && (
@@ -1404,12 +1560,12 @@ export default function App() {
                             title="Inspect real background tools executed for this message"
                           >
                             <Terminal size={11} />
-                            {msg.tool_calls.length} Background {msg.tool_calls.length === 1 ? 'Job' : 'Jobs'} Executed
+                            {msg.tool_calls.length} Background {msg.tool_calls.length === 1 ? 'Job' : 'Jobs'}
                           </button>
                         )}
                         {msg.latency_ms && (
-                          <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>
-                            ⚡ {msg.latency_ms} ms
+                          <span style={{ color: 'var(--text-dim)', fontSize: '0.68rem', fontFamily: 'var(--font-mono)' }}>
+                            {msg.latency_ms} ms
                           </span>
                         )}
                       </div>
@@ -1419,10 +1575,10 @@ export default function App() {
 
                 {isLoadingChat && (
                   <div className="message assistant">
-                    <div className="avatar assistant"><Truck size={18} /></div>
+                    <div className="avatar assistant"><Truck size={16} /></div>
                     <div className="message-bubble" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                      <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} />
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                      <RefreshCw size={14} className="spin" style={{ color: 'var(--primary)' }} />
+                      <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
                         Evaluating operational feasibility & scheduling constraints...
                       </span>
                     </div>
@@ -1431,18 +1587,18 @@ export default function App() {
                 <div ref={chatBottomRef} />
               </div>
 
-              {/* Indian Hinglish Voice Presets Bar */}
+              {/* Regional Hinglish Voice Presets Bar */}
               <div className="voice-presets-container">
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.35rem' }}>
-                  <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <Mic size={13} />
-                    🎙️ Indian Highway Hinglish Voice Notes (Real Audio Simulation):
+                    Highway Voice Presets (Regional Audio NLP):
                   </span>
-                  <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
-                    Regional Logistics Audio NLP
+                  <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+                    Multimodal Whisper Engine
                   </span>
                 </div>
-                <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
                   {voicePresets.map((preset) => (
                     <button
                       key={preset.id}
@@ -1452,7 +1608,7 @@ export default function App() {
                       disabled={isLoadingChat}
                       title={preset.transcript}
                     >
-                      <Volume2 size={12} />
+                      <Volume2 size={11} />
                       <strong>{preset.title}</strong>
                       <span style={{ fontSize: '0.68rem', opacity: 0.85 }}>({preset.delay_minutes > 0 ? `+${preset.delay_minutes}m` : 'EMERGENCY'})</span>
                     </button>
@@ -1462,38 +1618,38 @@ export default function App() {
 
               {/* Quick Prompts Bar */}
               <div className="quick-prompts-bar">
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', alignSelf: 'center', fontWeight: 600 }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', alignSelf: 'center', fontWeight: 600 }}>
                   Quick Prompts:
                 </span>
                 <button
                   className="chip-btn"
                   onClick={() => sendMessage("Traffic after Shahpura. Reaching around 11:20. Any slot after 12?")}
                 >
-                  🚗 Delay: Shahpura (~11:20 AM)
+                  Delay: Shahpura (~11:20 AM)
                 </button>
                 <button
                   className="chip-btn"
                   onClick={() => sendMessage("I will be late by 45 minutes due to highway congestion.")}
                 >
-                  ⏱️ Late by 45 Minutes
+                  Late by 45 Minutes
                 </button>
                 <button
                   className="chip-btn"
                   onClick={() => sendMessage("Evening traffic on highway. ETA 6:30 PM. Can the reefer unload tonight?")}
                 >
-                  ❄️ Reefer Curfew Query (ETA 6:30 PM)
+                  Reefer Curfew Query (6:30 PM)
                 </button>
                 <button
                   className="chip-btn"
                   onClick={() => sendMessage("I am carrying order ORD-260804-006.")}
                 >
-                  📋 Specify ORD-260804-006
+                  Specify ORD-260804-006
                 </button>
                 <button
                   className="chip-btn"
                   onClick={() => sendMessage("Arrived early in yard. Can I unload now?")}
                 >
-                  📦 Early Yard Check-In
+                  Early Yard Check-In
                 </button>
               </div>
 
@@ -1502,27 +1658,27 @@ export default function App() {
                 <div className="recording-overlay-bar">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                     <span className="recording-pulse-indicator" />
-                    <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#fca5a5' }}>
-                      Listening in {selectedSpeechLang}... Speak naturally!
+                    <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#fca5a5' }}>
+                      Recording in {selectedSpeechLang}... Speak clearly into mic
                     </span>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem', color: '#fff', fontWeight: 800 }}>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', color: '#fff', fontWeight: 700 }}>
                       00:{recordingTime < 10 ? `0${recordingTime}` : recordingTime}
                     </span>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                  <div style={{ display: 'flex', gap: '0.35rem' }}>
                     <button
                       type="button"
                       className="btn btn-primary"
-                      style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem', background: '#10b981' }}
+                      style={{ padding: '0.3rem 0.65rem', fontSize: '0.73rem', background: 'var(--success)' }}
                       onClick={stopMicrophoneRecordingAndSend}
                     >
-                      <Send size={12} />
+                      <Send size={11} />
                       Send Voice Note
                     </button>
                     <button
                       type="button"
                       className="btn btn-secondary"
-                      style={{ padding: '0.35rem 0.65rem', fontSize: '0.75rem' }}
+                      style={{ padding: '0.3rem 0.55rem', fontSize: '0.73rem' }}
                       onClick={cancelMicrophoneRecording}
                     >
                       ✕ Discard
@@ -1542,22 +1698,22 @@ export default function App() {
                 {/* Language Selector */}
                 <select
                   className="select-input"
-                  style={{ width: 'auto', padding: '0.4rem 0.55rem', fontSize: '0.72rem', borderColor: '#475569', background: '#1e293b' }}
+                  style={{ width: 'auto', padding: '0.45rem 0.65rem', fontSize: '0.73rem', background: 'var(--bg-input)' }}
                   value={selectedSpeechLang}
                   onChange={(e) => setSelectedSpeechLang(e.target.value)}
                   title="Select voice input language"
                 >
-                  <option value="hi-IN">🇮🇳 Hindi / Hinglish</option>
-                  <option value="en-IN">🇮🇳 Indian English</option>
-                  <option value="pa-IN">🇮🇳 Punjabi</option>
-                  <option value="mr-IN">🇮🇳 Marathi</option>
-                  <option value="gu-IN">🇮🇳 Gujarati</option>
+                  <option value="hi-IN">Hindi / Hinglish</option>
+                  <option value="en-IN">Indian English</option>
+                  <option value="pa-IN">Punjabi</option>
+                  <option value="mr-IN">Marathi</option>
+                  <option value="gu-IN">Gujarati</option>
                 </select>
 
                 <input
                   type="text"
                   className="chat-input"
-                  placeholder={isRecording ? "Listening to your voice in real-time..." : "Type message or click 🎙️ Speak to record..."}
+                  placeholder={isRecording ? "Listening to your voice..." : "Type driver message or record voice note..."}
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   disabled={isLoadingChat}
@@ -1615,12 +1771,12 @@ export default function App() {
                     activeInspectorData.execution_pipeline.map((step, sIdx) => (
                       <div key={sIdx} className="pipeline-step-card active">
                         <div className="pipeline-step-header">
-                          <span style={{ color: '#93c5fd' }}>{step.stage}</span>
+                          <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{step.stage}</span>
                           <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
                             {step.timestamp}
                           </span>
                         </div>
-                        <div style={{ fontSize: '0.8rem', color: '#e5e7eb' }}>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-main)' }}>
                           {step.detail}
                         </div>
                       </div>
@@ -1649,14 +1805,14 @@ export default function App() {
                               </span>
                             </div>
 
-                            <div style={{ fontSize: '0.8rem', color: '#f3f4f6' }}>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-main)' }}>
                               {tc.summary || `Invoked tool ${tc.name}`}
                             </div>
 
                             {/* Collapsible Tool Arguments */}
                             <div>
                               <button
-                                style={{ background: 'transparent', border: 'none', color: '#93c5fd', fontSize: '0.72rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.15rem 0' }}
+                                style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.72rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.15rem 0' }}
                                 onClick={() => toggleJson(`args_${tIdx}`)}
                               >
                                 {expandedJson[`args_${tIdx}`] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -1691,8 +1847,8 @@ export default function App() {
                   )}
 
                   {/* Business Rules Summary */}
-                  <div style={{ marginTop: 'auto', background: 'rgba(0,0,0,0.3)', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-light)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
-                    <div style={{ fontWeight: 700, color: '#f3f4f6', marginBottom: '0.25rem' }}>
+                  <div style={{ marginTop: 'auto', background: 'var(--bg-tertiary)', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--text-main)', marginBottom: '0.25rem' }}>
                       Enforced Invariants:
                     </div>
                     <div>• Zero double-booking via SQLite unique indexes</div>
@@ -1769,7 +1925,7 @@ export default function App() {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', marginBottom: '0.85rem' }}>
                           <div>
                             <span className="info-label">Shipment / Order</span>
-                            <div style={{ fontWeight: 600, fontFamily: 'var(--font-mono)', color: '#93c5fd' }}>
+                            <div style={{ fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--primary)' }}>
                               {exc.shipment_id || 'N/A'} ({exc.order_reference || 'N/A'})
                             </div>
                           </div>
@@ -1794,7 +1950,7 @@ export default function App() {
 
                       {/* Supervisor Resolution Box */}
                       <div className="supervisor-box">
-                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#f3f4f6' }}>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-main)' }}>
                           Supervisor Resolution
                         </span>
                         <textarea
@@ -1848,7 +2004,10 @@ export default function App() {
             <div className="facilities-grid">
               <div className="card">
                 <div className="card-title">
-                  <span>🏢 Jaipur Distribution Centre</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <Building2 size={16} style={{ color: 'var(--primary)' }} />
+                    Jaipur Distribution Centre
+                  </span>
                   <code style={{ color: 'var(--primary)', fontFamily: 'var(--font-mono)' }}>FAC-JAI-01</code>
                 </div>
                 <div className="info-grid">
@@ -1873,7 +2032,10 @@ export default function App() {
 
               <div className="card">
                 <div className="card-title">
-                  <span>🏢 Gurugram Cross-Dock</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <Building2 size={16} style={{ color: 'var(--primary)' }} />
+                    Gurugram Cross-Dock
+                  </span>
                   <code style={{ color: 'var(--primary)', fontFamily: 'var(--font-mono)' }}>FAC-GGN-01</code>
                 </div>
                 <div className="info-grid">
@@ -1967,7 +2129,7 @@ export default function App() {
                       <tr key={idx}>
                         <td style={{ fontWeight: 700, textAlign: 'center' }}>#{row.queue_position || idx + 1}</td>
                         <td>{row.facility_id}</td>
-                        <td style={{ fontFamily: 'var(--font-mono)', color: '#93c5fd' }}>{row.shipment_id}</td>
+                        <td style={{ fontFamily: 'var(--font-mono)', color: 'var(--primary)' }}>{row.shipment_id}</td>
                         <td>{row.driver_name || row.driver_id}</td>
                         <td style={{ fontFamily: 'var(--font-mono)' }}>{row.gate_checkin_ts?.slice(11, 16)}</td>
                         <td>{row.wait_minutes ? `${row.wait_minutes} mins` : 'Waiting'}</td>
@@ -2046,7 +2208,10 @@ export default function App() {
               {/* Column 1: Priority Allocation Sequence */}
               <div className="card">
                 <div className="card-title">
-                  <span>🏆 Cost-Optimal Queue Allocation Sequence</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <TrendingUp size={16} style={{ color: 'var(--success-text)' }} />
+                    Cost-Optimal Queue Allocation Sequence
+                  </span>
                   <span className="badge badge-medium">Game-Theoretic Permutation</span>
                 </div>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.85rem' }}>
@@ -2099,7 +2264,10 @@ export default function App() {
               {/* Column 2: Contractual Cargo Penalty Matrix */}
               <div className="card">
                 <div className="card-title">
-                  <span>📋 Contractual Penalty Matrix by Cargo Class</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <FileText size={16} style={{ color: 'var(--primary)' }} />
+                    Contractual Penalty Matrix by Cargo Class
+                  </span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '0.5rem' }}>
                   <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.75rem', borderRadius: 'var(--radius-md)' }}>
@@ -2122,12 +2290,12 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '0.75rem', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '0.82rem', color: '#93c5fd' }}>
+                  <div style={{ background: 'var(--primary-light)', border: '1px solid var(--primary-border)', padding: '0.75rem', borderRadius: 'var(--radius-md)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '0.82rem', color: 'var(--primary)' }}>
                       <span>JIT Industrial Auto Stamping Parts</span>
                       <span>₹8,500 / hr</span>
                     </div>
-                    <div style={{ fontSize: '0.72rem', color: '#bfdbfe', marginTop: '0.2rem' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
                       Assembly Line Halt Risk • Heavy Duty Bay D1 Required
                     </div>
                   </div>
@@ -2180,7 +2348,10 @@ export default function App() {
               {/* Column 1: Active Disruptions */}
               <div className="card">
                 <div className="card-title">
-                  <span>💥 Active Injected Disruptions</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <Flame size={16} style={{ color: 'var(--danger-text)' }} />
+                    Active Injected Disruptions
+                  </span>
                   <span className="badge badge-critical">{chaosStatus.active_chaos_events_count} Active</span>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
@@ -2221,7 +2392,7 @@ export default function App() {
                               <span className="badge badge-critical">{evt.severity}</span>
                             </td>
                             <td>{evt.affected_count} Trucks</td>
-                            <td style={{ fontSize: '0.74rem', color: '#93c5fd' }}>
+                            <td style={{ fontSize: '0.74rem', color: 'var(--primary)', fontWeight: 600 }}>
                               Auto-rescheduled & priority diverted
                             </td>
                           </tr>
@@ -2235,7 +2406,10 @@ export default function App() {
               {/* Column 2: Adversarial Security Log */}
               <div className="card">
                 <div className="card-title">
-                  <span>🛡️ Adversarial Security & Red-Team Audit</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    <ShieldAlert size={16} style={{ color: 'var(--purple-text)' }} />
+                    Adversarial Security & Red-Team Audit
+                  </span>
                   <span className="badge badge-resolved">{chaosStatus.security_thwarted_attacks_count} Attacks Blocked</span>
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
@@ -2453,7 +2627,7 @@ export default function App() {
                           const avgMs = stats.avg_ms ?? stats.avg_latency_ms ?? 0
                           return (
                             <tr key={toolName}>
-                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: '#93c5fd' }}>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--primary)' }}>
                                 {toolName}
                               </td>
                               <td style={{ fontWeight: 700 }}>{stats.calls}</td>
@@ -2477,7 +2651,10 @@ export default function App() {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem', marginTop: '1.5rem' }}>
                   <div className="card">
                     <div className="card-title">
-                      <span>🛡️ Invariant 1: Feasibility Engine Determinism</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <ShieldCheck size={16} style={{ color: 'var(--primary)' }} />
+                        Invariant 1: Feasibility Engine Determinism
+                      </span>
                     </div>
                     <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                       Dock assignment queries bypass LLM hallucination and run directly through <code>app/services/feasibility.py</code> with strict parameter verification against <code>dock_specifications</code>, curfew boundaries, and disruption windows.
@@ -2485,7 +2662,10 @@ export default function App() {
                   </div>
                   <div className="card">
                     <div className="card-title">
-                      <span>🔒 Invariant 2: Zero Double-Booking Lock</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <CheckCircle2 size={16} style={{ color: 'var(--success-text)' }} />
+                        Invariant 2: Zero Double-Booking Lock
+                      </span>
                     </div>
                     <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                       Transactions use <code>EXCLUSIVE IMMEDIATE</code> locking in SQLite and enforce unique <code>(dock_id, slot_start_ts)</code> constraints. Even under concurrent re-scheduling attempts, duplicate slot allocation is mathematically impossible.

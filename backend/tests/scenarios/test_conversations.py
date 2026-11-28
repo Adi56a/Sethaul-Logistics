@@ -17,18 +17,23 @@ TEST_CONVO_DB = "convo_test_fixture.db"
 class TestConversationalScenarios(unittest.TestCase):
     def setUp(self):
         # Create an isolated database fixture for conversation tests
+        import gc; gc.collect()
         if os.path.exists(TEST_CONVO_DB):
-            os.remove(TEST_CONVO_DB)
+            try:
+                os.remove(TEST_CONVO_DB)
+            except Exception:
+                pass
         shutil.copyfile(resolve_db_path(), TEST_CONVO_DB)
         self.repo = DatabaseRepository(TEST_CONVO_DB)
         set_custom_repo(self.repo)
         self.agent = SetuHaulAgent()
 
     def tearDown(self):
+        import gc; gc.collect()
         if os.path.exists(TEST_CONVO_DB):
             try:
                 os.remove(TEST_CONVO_DB)
-            except PermissionError:
+            except Exception:
                 pass
 
     def test_scenario_journey_a_delay_and_reschedule(self):

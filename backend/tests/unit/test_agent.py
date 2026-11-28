@@ -66,6 +66,7 @@ class TestAgentToolsAndFlow(unittest.TestCase):
 
     def test_agent_chat_ambiguous_shipment_clarification(self):
         """Agent asks targeted clarification when driver DRV004 reports a delay without identifying shipment."""
+        self.agent.clear_thread("test_thr_010")
         res = self.agent.chat(
             user_message="Traffic jam near Tonk Road, reaching late by 45 minutes.",
             thread_id="test_thr_010",
@@ -77,6 +78,7 @@ class TestAgentToolsAndFlow(unittest.TestCase):
 
     def test_agent_chat_reefer_escalation(self):
         """Agent escalates to human operator when reefer load SHP1015 has no feasible dock."""
+        self.agent.clear_thread("test_thr_005")
         res = self.agent.chat(
             user_message="Evening traffic. ETA 6:30. Can the reefer unload tonight?",
             thread_id="test_thr_005",

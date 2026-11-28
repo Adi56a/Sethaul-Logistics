@@ -324,6 +324,18 @@ def reset_chat(request: ResetThreadRequest):
     }
 
 
+@app.get("/api/chat/history/{thread_id}", tags=["Driver Chat"])
+def get_chat_history(thread_id: str):
+    """Retrieve full persistent conversation history for a driver thread."""
+    messages = agent.repo.get_chat_history(thread_id)
+    return {
+        "status": "SUCCESS",
+        "thread_id": thread_id,
+        "count": len(messages),
+        "messages": messages
+    }
+
+
 # --- Scheduling & Feasibility Endpoints ---
 
 @app.get("/api/shipments/{shipment_id}", tags=["Operations"])
