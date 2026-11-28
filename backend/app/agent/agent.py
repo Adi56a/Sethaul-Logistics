@@ -134,7 +134,11 @@ class SetuHaulAgent:
                     openai_api_base=self.base_url,
                     temperature=self.temperature,
                     request_timeout=30.0,
-                    max_retries=1
+                    max_retries=2,
+                    default_headers={
+                        "HTTP-Referer": "https://setuhaul.logistics",
+                        "X-Title": "SetuHaul Logistics Dispatch Assistant"
+                    }
                 ).bind_tools(ALL_AGENT_TOOLS)
             except Exception as e:
                 print(f"[SetuHaulAgent] Error binding LLM: {e}")
@@ -635,8 +639,62 @@ class SetuHaulAgent:
                     "status": "CONFLICT"
                 })
 
+        # Extract dynamic time / delay if present
+        import re
+        min_time_str = "2026-08-04T11:20:00+05:30"
+        reported_issue = "Transit Delay"
+
+        # Check explicit clock times: e.g. 11:20, 11:45, 12:00, 12:30, 1:30, 2:00, 18:30, 6:30
+        time_match = re.search(r'\b(0?[1-9]|1[0-2]|1[3-9]|2[0-3]):([0-5][0-9])\b', user_message)
+        if time_match:
+            hh = int(time_match.group(1))
+            mm = int(time_match.group(2))
+            is_pm = "pm" in msg_lower or (hh in [1, 2, 3, 4, 5, 6] and "am" not in msg_lower)
+            if is_pm and hh < 12:
+                hh += 12
+            min_time_str = f"2026-08-04T{hh:02d}:{mm:02d}:00+05:30"
+        else:
+            delay_mins = 60
+            if "aadha ghanta" in msg_lower or "30 min" in msg_lower or "half hour" in msg_lower:
+                delay_mins = 30
+            elif "45 min" in msg_lower or "paune ghante" in msg_lower:
+                delay_mins = 45
+            elif "2 ghante" in msg_lower or "do ghante" in msg_lower or "2 hours" in msg_lower:
+                delay_mins = 120
+            elif "90 min" in msg_lower or "dedh ghanta" in msg_lower:
+                delay_mins = 90
+            elif "1 ghanta" in msg_lower or "ek ghanta" in msg_lower or "1 hour" in msg_lower:
+                delay_mins = 60
+            else:
+                m_num = re.search(r'(\d+)\s*(min|minute|ghante|hour)', msg_lower)
+                if m_num:
+                    val = int(m_num.group(1))
+                    delay_mins = val * 60 if ("ghante" in m_num.group(2) or "hour" in m_num.group(2)) else val
+
+            base_eta_ts = shipment.get("effective_eta_ts") or "2026-08-04T10:20:00+05:30"
+            try:
+                base_dt = datetime.fromisoformat(base_eta_ts)
+                revised_dt = base_dt + timedelta(minutes=delay_mins)
+                min_time_str = revised_dt.isoformat()
+            except Exception:
+                min_time_str = "2026-08-04T11:20:00+05:30"
+
+        # Specific problem extraction
+        if "puncture" in msg_lower or "tyre" in msg_lower:
+            reported_issue = "Tyre Puncture & Replacement"
+        elif "radiator" in msg_lower or "garam" in msg_lower or "overheating" in msg_lower:
+            reported_issue = "Radiator Overheating & Cool-down"
+        elif "fog" in msg_lower or "dhund" in msg_lower:
+            reported_issue = "Dense Highway Fog"
+        elif "toll" in msg_lower:
+            reported_issue = "Toll Plaza Fastag Gridlock"
+        elif "traffic" in msg_lower or "jam" in msg_lower:
+            reported_issue = "Highway Traffic Congestion"
+
+        facility_name = "Jaipur DC" if "JAI" in (shipment.get("destination_facility_id") or "") else "Shahpura DC"
+
         # Standard delay / ask for options
-        slots_res = feasibility.search_feasible_slots(target_shp_id, min_time="2026-08-04T11:20:00+05:30")
+        slots_res = feasibility.search_feasible_slots(target_shp_id, min_time=min_time_str)
         raw_slots = [
             {
                 "slot_id": s.slot_id,
@@ -654,15 +712,27 @@ class SetuHaulAgent:
         else:
             slots_desc = "Dock D2 (12:00 PM to 1:00 PM) and Dock D4 (12:00 PM to 1:00 PM)"
 
-        is_hinglish = any(w in msg_lower for w in ["bhaiya", "gaadi", "fas", "late", "ghante", "ghanta", "toll", "puncture", "kharab", "dhund", "karega", "batao"])
+        arrival_clock = min_time_str[11:16]
+        try:
+            arr_hr = int(arrival_clock[:2])
+            arr_mn = arrival_clock[3:5]
+            arr_period = "AM" if arr_hr < 12 else "PM"
+            disp_hr = arr_hr if (0 < arr_hr <= 12) else (arr_hr - 12 if arr_hr > 12 else 12)
+            arrival_clock = f"{disp_hr}:{arr_mn} {arr_period}"
+        except Exception:
+            pass
+
+        is_hinglish = any(w in msg_lower for w in ["bhaiya", "gaadi", "fas", "late", "ghante", "ghanta", "toll", "puncture", "kharab", "dhund", "karega", "batao", "pahuch", "pahunch"])
         if is_hinglish:
             response_text = (
-                f"Ji aapka transit delay record kar liya gaya hai. Jaipur DC par aapke vehicle ke liye dock slots available hain: "
-                f"{slots_desc}. Kripya neeche diye gaye card se apna preferred slot confirm karein."
+                f"Ji aapka {reported_issue} update mil gaya hai. Revised arrival (~{arrival_clock}) record kar liya gaya hai. "
+                f"{facility_name} par aapke vehicle ke liye dock slots available hain: {slots_desc}. "
+                "Kripya neeche diye gaye card se apna preferred slot confirm karein."
             )
         else:
             response_text = (
-                f"Your ETA update has been recorded. At Jaipur DC, dock capacity is available: {slots_desc}. "
+                f"Your ETA update for {reported_issue} (~{arrival_clock}) has been recorded. "
+                f"At {facility_name}, dock capacity is available: {slots_desc}. "
                 "Please select your preferred slot from the cards below to confirm."
             )
 
@@ -674,7 +744,7 @@ class SetuHaulAgent:
             "response": response_text,
             "tool_calls": [{
                 "name": "find_feasible_dock_slots",
-                "args": {"shipment_id": target_shp_id, "min_time": "2026-08-04T11:20:00+05:30"},
+                "args": {"shipment_id": target_shp_id, "min_time": min_time_str},
                 "result": slots_res.model_dump(),
                 "status": "SUCCESS",
                 "summary": f"Feasibility query: Found {len(slots_res.feasible_slots)} open compatible slots."

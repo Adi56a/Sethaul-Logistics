@@ -201,6 +201,8 @@ export default function App() {
   const [recordingTime, setRecordingTime] = useState(0)
   const [selectedSpeechLang, setSelectedSpeechLang] = useState('hi-IN')
   const [speakingMsgIndex, setSpeakingMsgIndex] = useState(null)
+  const [speechBlocked, setSpeechBlocked] = useState(false)
+  const [emptyTranscriptWarning, setEmptyTranscriptWarning] = useState(false)
   const mediaRecorderRef = useRef(null)
   const audioChunksRef = useRef([])
   const recordingTimerRef = useRef(null)
@@ -674,30 +676,45 @@ export default function App() {
         setRecordingTime(prev => prev + 1)
       }, 1000)
 
+      setSpeechBlocked(false)
+      setEmptyTranscriptWarning(false)
+
       // Start Web Speech API SpeechRecognition if available
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
       if (SpeechRecognition) {
-        const recognition = new SpeechRecognition()
-        recognitionRef.current = recognition
-        recognition.lang = selectedSpeechLang
-        recognition.continuous = true
-        recognition.interimResults = true
+        try {
+          const recognition = new SpeechRecognition()
+          recognitionRef.current = recognition
+          recognition.lang = selectedSpeechLang
+          recognition.continuous = true
+          recognition.interimResults = true
 
-        recognition.onresult = (event) => {
-          let transcript = ''
-          for (let i = 0; i < event.results.length; i++) {
-            transcript += event.results[i][0].transcript
+          recognition.onresult = (event) => {
+            let transcript = ''
+            for (let i = 0; i < event.results.length; i++) {
+              transcript += event.results[i][0].transcript
+            }
+            if (transcript) {
+              setInputText(transcript)
+              setSpeechBlocked(false)
+              setEmptyTranscriptWarning(false)
+            }
           }
-          if (transcript) {
-            setInputText(transcript)
+
+          recognition.onerror = (e) => {
+            // Quietly catch blocked network calls (e.g. adblocker, VPN, or client restriction)
+            const errType = e?.error || 'unknown'
+            if (['network', 'service-not-allowed', 'not-allowed', 'aborted'].includes(errType)) {
+              setSpeechBlocked(true)
+            }
           }
-        }
 
-        recognition.onerror = (e) => {
-          console.warn('SpeechRecognition error:', e)
+          recognition.start()
+        } catch (sttErr) {
+          setSpeechBlocked(true)
         }
-
-        recognition.start()
+      } else {
+        setSpeechBlocked(true)
       }
     } catch (err) {
       console.warn('Microphone permission or hardware error:', err)
@@ -705,8 +722,21 @@ export default function App() {
     }
   }
 
-  const stopMicrophoneRecordingAndSend = () => {
+  const stopMicrophoneRecordingAndSend = (overrideText = null) => {
     if (!isRecording) return
+
+    const finalSpeechText = (typeof overrideText === 'string' && overrideText.trim())
+      ? overrideText.trim()
+      : inputText.trim()
+
+    // If no text was captured from speech or input, do NOT silently send a fake hardcoded delay!
+    if (!finalSpeechText) {
+      setEmptyTranscriptWarning(true)
+      return
+    }
+
+    setEmptyTranscriptWarning(false)
+    setSpeechBlocked(false)
 
     // Stop timer
     if (recordingTimerRef.current) {
@@ -727,10 +757,8 @@ export default function App() {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
         const audioUrl = URL.createObjectURL(audioBlob)
 
-        // Capture transcript from inputText or default Hinglish message
-        const speechText = inputText.trim() || 'Gaadi delay ho gayi hai highway par, revised slot chahiye.'
         setInputText('')
-        handleSendCustomVoiceNote(speechText, audioUrl)
+        handleSendCustomVoiceNote(finalSpeechText, audioUrl)
 
         // Stop stream tracks
         if (recorder.stream) {
@@ -739,15 +767,16 @@ export default function App() {
       }
       recorder.stop()
     } else {
-      const speechText = inputText.trim() || 'Gaadi delay ho gayi hai highway par, revised slot chahiye.'
       setInputText('')
-      handleSendCustomVoiceNote(speechText, null)
+      handleSendCustomVoiceNote(finalSpeechText, null)
     }
 
     setIsRecording(false)
   }
 
   const cancelMicrophoneRecording = () => {
+    setEmptyTranscriptWarning(false)
+    setSpeechBlocked(false)
     if (recordingTimerRef.current) {
       clearInterval(recordingTimerRef.current)
       recordingTimerRef.current = null
@@ -1655,35 +1684,105 @@ export default function App() {
 
               {/* Live Microphone Recording Overlay */}
               {isRecording && (
-                <div className="recording-overlay-bar">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <span className="recording-pulse-indicator" />
-                    <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#fca5a5' }}>
-                      Recording in {selectedSpeechLang}... Speak clearly into mic
-                    </span>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', color: '#fff', fontWeight: 700 }}>
-                      00:{recordingTime < 10 ? `0${recordingTime}` : recordingTime}
-                    </span>
+                <div className="recording-overlay-bar" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.55rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span className="recording-pulse-indicator" />
+                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#fca5a5' }}>
+                        Recording in {selectedSpeechLang}... Speak clearly
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', color: '#fff', fontWeight: 700 }}>
+                        00:{recordingTime < 10 ? `0${recordingTime}` : recordingTime}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        style={{ padding: '0.3rem 0.65rem', fontSize: '0.73rem', background: 'var(--success)' }}
+                        onClick={() => stopMicrophoneRecordingAndSend()}
+                      >
+                        <Send size={11} />
+                        Send Voice Note
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '0.3rem 0.55rem', fontSize: '0.73rem' }}
+                        onClick={cancelMicrophoneRecording}
+                      >
+                        ✕ Discard
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.35rem' }}>
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ padding: '0.3rem 0.65rem', fontSize: '0.73rem', background: 'var(--success)' }}
-                      onClick={stopMicrophoneRecordingAndSend}
-                    >
-                      <Send size={11} />
-                      Send Voice Note
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      style={{ padding: '0.3rem 0.55rem', fontSize: '0.73rem' }}
-                      onClick={cancelMicrophoneRecording}
-                    >
-                      ✕ Discard
-                    </button>
-                  </div>
+
+                  {/* Real-time transcribed text preview if speech recognition is receiving audio */}
+                  {inputText.trim() ? (
+                    <div style={{
+                      fontSize: '0.74rem',
+                      color: 'var(--text-primary)',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      padding: '0.35rem 0.6rem',
+                      borderRadius: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem'
+                    }}>
+                      <span style={{ color: 'var(--accent)', fontWeight: 600 }}>Captured:</span>
+                      <span style={{ fontStyle: 'italic' }}>"{inputText}"</span>
+                    </div>
+                  ) : null}
+
+                  {/* Browser Adblocker / Empty Transcript Guidance */}
+                  {(speechBlocked || emptyTranscriptWarning) && (
+                    <div style={{
+                      background: 'rgba(245, 158, 11, 0.12)',
+                      border: '1px solid rgba(245, 158, 11, 0.35)',
+                      borderRadius: '6px',
+                      padding: '0.45rem 0.65rem',
+                      fontSize: '0.73rem',
+                      color: '#fde68a'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600, marginBottom: '0.35rem' }}>
+                        <span>⚠️ {speechBlocked ? "Browser adblocker blocked Google Cloud STT." : "Voice transcript empty."}</span>
+                        <span style={{ opacity: 0.85, fontWeight: 400 }}>Choose your intent below or type in the box:</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}
+                          onClick={() => stopMicrophoneRecordingAndSend("Traffic jam near Shahpura, ETA revised by 45 minutes.")}
+                        >
+                          🚗 NH-48 Traffic (+45m)
+                        </button>
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}
+                          onClick={() => stopMicrophoneRecordingAndSend("Tyre puncture near Behror, reaching around 12:30 PM.")}
+                        >
+                          🔧 Tyre Puncture (~12:30 PM)
+                        </button>
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}
+                          onClick={() => stopMicrophoneRecordingAndSend("Radiator garam ho gaya hai, 1 ghanta delay hoga.")}
+                        >
+                          🌡️ Radiator Overheating (+60m)
+                        </button>
+                        <button
+                          type="button"
+                          className="chip-btn"
+                          style={{ fontSize: '0.68rem', padding: '0.15rem 0.45rem' }}
+                          onClick={() => stopMicrophoneRecordingAndSend("Please confirm Dock D4 for my shipment.")}
+                        >
+                          ✅ Confirm Dock D4
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

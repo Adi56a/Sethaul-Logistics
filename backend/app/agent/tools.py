@@ -113,6 +113,18 @@ def find_feasible_dock_slots(
             for s in res.feasible_slots
         ]
     }
+    if res.result_code.value == "NO_FEASIBLE_SLOT":
+        try:
+            downtimes = _repo.fetch_all(
+                "SELECT dock_id, event_type, reason FROM dock_status_events WHERE event_type IN ('MAINTENANCE', 'BREAKDOWN');"
+            )
+            if downtimes:
+                reasons = [f"{d['dock_id']} is under {d['event_type'].lower()} ({d['reason']})" for d in downtimes]
+                data["operational_downtimes"] = reasons
+                data["message"] += f" Operational notice: {'; '.join(reasons)}."
+        except Exception:
+            pass
+
     return json.dumps(data, indent=2)
 
 

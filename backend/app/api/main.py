@@ -204,8 +204,12 @@ def root(request: Request):
 
 @app.get("/health", tags=["System"])
 def health():
-    """System health check and database integrity verification."""
+    """System health check, database integrity verification, and LLM readiness."""
     res = run_health_check(repo.db_path)
+    res["version"] = "2.4.0"
+    res["llm_ready"] = bool(agent.llm is not None)
+    res["model_name"] = agent.model_name
+    res["openrouter_configured"] = bool(os.getenv("OPENROUTER_API_KEY"))
     if res["status"] == "FAIL":
         raise HTTPException(status_code=500, detail=res)
     return res
